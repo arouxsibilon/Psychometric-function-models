@@ -1,0 +1,355 @@
+---
+title: "Models for the psychometric function"
+author: "Alexia Roux-Sibilon"
+date: "11/18/2020"
+output:
+  prettydoc::html_pretty:
+    theme: leonids
+    highlight: github
+    # toc: yes
+    # toc_depth: 3
+    # toc_float: yes
+---
+
+
+
+```{r setup, include = FALSE}
+# library(tidyverse)
+# library(magrittr)
+# library(knitr)
+# library(brms)
+# library(BEST)
+# library(readxl)
+# library(Hmisc)
+# library(bayesplot)
+# library(tidybayes)
+# library(modelr)
+
+packages = c("tidyverse",
+             "brms" ,
+             "magrittr",
+             "BEST",
+             "reshape2",
+             "tidybayes")
+
+package.check <- lapply(
+  packages,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+      library(x, character.only = TRUE)
+    }
+  }
+)
+
+knitr::opts_chunk$set(
+  echo = TRUE, eval = TRUE, cache = TRUE,
+  message = FALSE, warning = FALSE,
+  fig.align = "center"
+  )
+
+colors <- c("grey50", "grey5")
+```
+
+
+
+
+# The general form of the psychometric function 
+A psychometric function $\Psi$ summarizes the relation between a response variable $p$ (e.g., the probability of a correct response) and a variable $x$ defining the intensity of the stimulus, manipulated parametrically by the experimenter (e.g., a common parameter being manipulated in visual science is the contrast of visual stimuli).  The psychometric function has a sigmoidal form ("threshold" function):  
+
+\begin{align*}
+p(x) = \Psi(x;\theta)   
+\end{align*}
+
+where $\theta$ is the vector of parameters defining the family of the probability mass function of the model. Families of psychometric functions can be created based on any cumulative distribution function family. The more common are the Gaussian, the Logistic, and the Weibull distributions. 
+
+\begin{align*}
+\theta = (\alpha, \beta, \gamma, \lambda)
+\end{align*}
+
+
+\begin{align}
+\alpha        &&     &\mbox{location parameter} \\
+\beta         &&     &\mbox{scale parameter}    \\
+\gamma        &&     &\mbox{guess rate (e.g., chance level), corresponding to the lower asymptote}    \\
+\lambda       &&     &\mbox{lapse rate, corresponding to the upper asymptote}    
+
+\end{align}  
+
+
+
+$\gamma$ and $\lambda$ are independent of the properties of the underlying sensory mechanism that we aim to model. They are not necessarily free parameters, one can fit a model with only $\alpha$ and $\beta$ as free parameters. Most of the time, the guessing rate $\gamma$ is constant. For example in a $n$AFC experiment, $\gamma = 1/n$ (e.g., $1/2 = 0.5$ for a 2AFC, $1/3 = 0.33$ for a 3AFC, etc.).  
+The lapse rate $\lambda$ allows the function to asymptote at values lower than 1, thus accounting for lapses of attention, blinks during trials, wrong button pressed by accident, etc. i.e. errors that are independent of the stimulus. In actual experimental settings, the lapse rate is very unlikely to be zero, and it is recommended to estimate $\lambda$. Wichmann and Hill (2001) have demonstrated that having the lapse rate/upper asymptote $\lambda$ as a free parameter in the model allows for a more stable estimate of the parameters of interest, in particular the scale parameter $\beta$, although Prins (2012)'s study did not support this claim and proposed that what is important is not to held $\lambda$ constant at zero. Therefore, $\lambda$ can also be fixed at a reasonable value (e.g., $0.01$).  
+
+We are typically interested in how experimental variations influence $\alpha$ and $\beta$, which relate directly to the sensory mechanism of interest, and less in $\gamma$ and $\lambda$, which are related to the task and the psychological state of the subject during the experiment, respectively.  
+
+
+The psychometric function is more specifically described by the following equation:  
+
+\begin{align*}
+p(x) = \gamma + (1 - \gamma - \lambda) F(x;\alpha,\beta) 
+\end{align*}
+
+$F$ is a function with lower asymptote 0 and upper asymptote 1, with a sigmoidal shape (cumulative normal, logistic or Weibull for instance).
+
+
+# Implementing psychometric function models in `brms` 
+
+The objective is to estimate the parameters of the psychometric function using a Bayesian estimation, i.e. apply Bayes theorem to derive the posterior probability distribution on the values of $\alpha$ and $\beta$, using the package `brms`.  
+I use a data set from an experiment in which an observer was asked to perform a 3AFC face identification task. The face stimulus was presented *either upright or inverted* in the picture-plane (we call this variable **Inversion**), and its visibility was manipulated by parametrically varying a *phase coherence* parameter from a level of 1 (where the phase of the face image was practically fully randomised) to a level of 7 (where the face was well visible). Phase coherence relates to stimulus intensity, it is the $x$ variable. The response variable is the accuracy. Thus, the psychometric function that we want to estimate gives the probability of a correct response given the phase coherence $x$.   
+
+To model this data, I do not fix the lapse rate $\lambda$ and let my model estimate it, because typically sensitivity to face identity is lower for inverted faces, even for unaltered stimuli (face inversion effect). Therefore, I expect the inversion predictor to have an effect on the lapse rate.  
+
+
+
+### The Weibull function 
+
+
+\begin{align*}
+p = \gamma + (1 - \gamma - \lambda) (1-e^{-(\frac{x}{\alpha})^\beta})
+\end{align*}
+
+
+```{r data, echo = FALSE}
+df <- read.csv("data.csv")
+
+``` 
+
+The formula of the weibull model for `brms` is:
+
+```{r weibull-formula, eval = TRUE, results = "hide", cache = FALSE}
+formula.weibull <-
+  brmsformula(accuracy ~ 0.33 + (1 - 0.33 - lambda) * ( 1 - exp(-(phase/alpha)^beta) ),
+              alpha ~ 1 + inversion,
+              beta ~ 1 + inversion,
+              lambda ~ 1 + inversion,
+              nl = TRUE)
+```
+
+The first line is the Weibull model. The next three lines are the linear models of each of the parameters to be estimated. That is, the model estimates the intercept of each parameter (indicated by 1 in the formula), and the slope of the parameter for the *inversion* factor (i.e. by how much the parameter changes between the *upright* and *inverted* conditions). The fourth line tells to `brms` that this is a non linear model. 
+Here, I don't want to estimate the guess rate $\gamma$. Since it is a 3AFC task, I fix the guess rate to 0.33.  
+
+Then, I specify the priors 
+
+```{r weibull-priors, eval = TRUE, results = "hide"}
+priors.weibull <- c(
+  prior(beta(1, 1), nlpar = "lambda", lb = 0, ub = .1),
+  prior(normal(4, 10), nlpar = "alpha", lb = 0, ub = 7),
+  prior(normal(2, 10), nlpar = "beta")
+  )
+```
+
+This is really experimental. For $\lambda$ I use a beta distribution (with its own parameters $\alpha = 1$ and $\beta = 1$), as recommended by Kuss, Jäkel & Wichmann (2005, Jov) for example. 
+I use a gaussian distribution for $\alpha$ and $\beta$, but since they can take only positive values, the gamma or the log-normal distribution could have been used (I think). The `lb` and `ub` arguments allow to specify lower and upper bound of the parameters.    
+
+Let's fit the model, by specifying a bernoulli link function
+```{r weibull-fit, echo = TRUE, eval = FALSE, results = "hide", cache = TRUE}
+fit.weibull <- brm(
+  formula = formula.logistic,
+  data = df,
+  family = bernoulli("identity"),
+  prior = priors.logistic,
+  warmup = 1000,
+  iter = 4000,
+  cores = parallel::detectCores(),
+  chains = 2,
+  control = list(adapt_delta = .99),
+  # sample_prior = "yes"
+  file = "weibullnew.rds"
+)
+```
+
+
+Model summary:
+```{r weibull-summary, echo = TRUE, eval = TRUE}
+weibull <- readRDS("weibull.rds")
+summary(weibull)
+``` 
+
+
+```{r plot-weibull, eval=TRUE, echo=FALSE, fig.height=4, fig.width=5}
+dfpred <- crossing(
+  phase = seq(from = 1, to = 7, length.out = 100),
+  inversion = c("upright", "inverted")
+)
+
+predicted_data <- add_fitted_draws(weibull, newdata = dfpred, re_formula = NA, scale = "response")
+
+
+predicted_data <- predicted_data %<>% 
+  mean_qi()
+
+
+df %>%
+  ggplot(aes(x = phase, y = accuracy, color = inversion)) +
+  stat_summary(fun.data = "mean_cl_normal") +
+  geom_ribbon(
+    data = predicted_data,
+    aes(
+      x = phase,
+      ymin = .lower,
+      ymax = .upper,
+      fill = inversion
+    ),
+    inherit.aes = FALSE,
+    alpha = 0.5
+  ) +
+  geom_line(
+    data = predicted_data,
+    aes(x = phase, y = .value, color = inversion),
+    inherit.aes = FALSE,
+    size = 1.5,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = colors)+
+  scale_fill_manual(values = colors) +
+  labs(x = "phase coherence", y = "p(c)") +
+  theme_classic(base_size = 12)
+```
+
+
+
+
+
+
+### The (4 parameters) logistic
+
+\begin{align*}
+p(I) =  \frac{exp(-\frac{x-\alpha}{\beta})}{1 + exp(-\frac{x-\alpha}{\beta})}
+\end{align*}
+
+
+The formula of the logistic model for `brms` is:
+
+```{r logistic-formula, eval = TRUE, results = "hide", cache = FALSE}
+formula.logistic <-
+  brmsformula(accuracy ~ 0.33 + (1 - 0.33 - lambda) / ( 1 + exp(-beta * (phase - alpha)) ) ,  
+              alpha ~ 1 + inversion, 
+              beta ~ 1 + inversion,
+              lambda ~ 1 + inversion,
+              nl = TRUE)
+```
+
+
+
+Then, I specify the priors 
+
+```{r logistic-priors, eval = TRUE, results = "hide"}
+priors.logistic <- c(
+  prior(normal(0.5, 0.25), nlpar = "lambda", coef = "Intercept"),
+  prior(normal(0, 0.2), nlpar = "lambda", class = "b"), 
+  
+  prior(normal(4, 1), nlpar = "alpha", coef = "Intercept"),
+  prior(normal(0, 2), nlpar = "alpha", class = "b"), 
+  
+  prior(normal(4, 1), nlpar = "beta", coef = "Intercept"),
+  prior(normal(0, 2), nlpar = "beta", class = "b") 
+)
+```
+
+I've done tons of tests to find priors that work well. With the logistic I've found that a gaussian prior on the $\lambda$ parameter worked surprisingly better than a beta prior, or any other one-sided distribution.
+
+```{r logistic-fit, echo = TRUE, eval = FALSE, results = "hide", cache = TRUE}
+fit.logistic <- brm(
+  formula = formula.logistic,
+  data = df,
+  family = bernoulli("identity"),
+  prior = priors.logistic,
+  warmup = 1000,
+  iter = 4000,
+  cores = parallel::detectCores(),
+  chains = 2,
+  control = list(adapt_delta = .99),
+  # sample_prior = "yes"
+  file = "logistic.rds"
+)
+```
+
+
+Model summary:
+```{r logistic-summary, echo = TRUE, eval = TRUE}
+logistic <- readRDS("logistic.rds")
+summary(logistic)
+``` 
+
+
+```{r plot-logistic, eval=TRUE, echo=FALSE, fig.height=4, fig.width=5}
+dfpred <- crossing(
+  phase = seq(from = 1, to = 7, length.out = 100),
+  inversion = c("upright", "inverted")
+)
+
+predicted_data <- add_fitted_draws(logistic, newdata = dfpred, re_formula = NA, scale = "response")
+
+
+predicted_data <- predicted_data %<>% 
+  mean_qi()
+
+df %>%
+  ggplot(aes(x = phase, y = accuracy, color = inversion)) +
+  stat_summary(fun.data = "mean_cl_normal") +
+  geom_ribbon(
+    data = predicted_data,
+    aes(
+      x = phase,
+      ymin = .lower,
+      ymax = .upper,
+      fill = inversion
+    ),
+    inherit.aes = FALSE,
+    alpha = 0.5
+  ) +
+  geom_line(
+    data = predicted_data,
+    aes(x = phase, y = .value, color = inversion),
+    inherit.aes = FALSE,
+    size = 1.5,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = colors)+
+  scale_fill_manual(values = colors) +
+  labs(x = "phase coherence", y = "p(c)") +
+  theme_classic(base_size = 12)
+```
+
+
+
+In this case where I want to estimate the lapse rate $\lambda$, in addition to $\alpha$ and $\beta$, the 4 parameters logistic works better. 
+
+
+
+### The cumulative gaussian
+
+
+\begin{align*}
+p(I) =  \frac{1}{\sqrt{2\pi\sigma}} \int_{-\infty}^{I} e^{-\frac{(u-\mu)^2}{2\sigma^2}}
+\end{align*}
+
+
+### The Cauchy
+
+\begin{align*}
+p(I) =  \frac{1}{\pi}arctan(\frac{x-m}{s} + \frac{1}{2})
+\end{align*}
+
+
+
+
+
+# References
+Watson, A. B. (1979). Probability summation over time. *Vision research*, 19(5), 515-522.   
+
+Yssaad-Fesselier, R., & Knoblauch, K. (2006). Modeling psychometric functions in R. *Behavior research methods*, 38(1), 28-41.   
+
+Knoblauch, K., & Maloney, L. T. (2012). Modeling psychophysical data in R (Vol. 32). *Springer Science & Business Media*.  
+
+Schütt, H. H., Harmeling, S., Macke, J. H., & Wichmann, F. A. (2016). Painfree and accurate Bayesian estimation of psychometric functions for (potentially) overdispersed data. *Vision research*, 122, 105-123.  
+Moors, P., Costa, T. L., & Wagemans, J. (2020). Configural superiority for varying contrast levels. *Attention, Perception, & Psychophysics*, 82(3), 1355-1367.
+
+Wichmann, F. A., & Hill, N. J. (2001). The psychometric function: I. Fitting, sampling, and goodness of fit. *Perception & psychophysics*, 63(8), 1293-1313.  
+
+Prins, N. (2012). The psychometric function: The lapse rate revisited. *Journal of Vision*, 12(6), 25-25.  
+
+Linares, D., & López-Moliner, J. (2016). quickpsy: An R package to fit psychometric functions for multiple groups. *The R Journal*, 2016, vol. 8, num. 1, p. 122-131.  
+
+Strasburger, H. (2001). Converting between measures of slope of the psychometric function. *Perception & psychophysics*, 63(8), 1348-1355.  
